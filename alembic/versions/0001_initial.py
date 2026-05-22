@@ -1,4 +1,4 @@
-"""initial: conversations, messages, processed_messages
+"""initial: dialogs, messages, leads, processed_messages
 
 Revision ID: 0001_initial
 Revises:
@@ -22,19 +22,17 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "conversations",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("channel_id", sa.String(length=64), nullable=False),
-        sa.Column("chat_type", sa.String(length=32), nullable=False),
+        "dialogs",
+        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("chat_id", sa.String(length=128), nullable=False),
-        sa.Column("contact_name", sa.String(length=256), nullable=True),
-        sa.Column("requires_human", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("handoff_reason", sa.String(length=512), nullable=True),
+        sa.Column("channel_id", sa.String(length=128), nullable=False),
+        sa.Column("contact_id", sa.String(length=128), nullable=True),
+        sa.Column("chat_type", sa.String(length=32), nullable=True),
         sa.Column(
-            "extra",
-            postgresql.JSONB(astext_type=sa.Text()),
+            "status",
+            sa.String(length=32),
             nullable=False,
-            server_default="{}",
+            server_default="active",
         ),
         sa.Column(
             "created_at",
@@ -42,76 +40,79 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_conversations")),
-        sa.UniqueConstraint(
-            "channel_id", "chat_id", name="uq_conversations_channel_chat"
-        ),
+        sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("human_takeover_at", sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_dialogs")),
     )
     op.create_index(
-        "ix_conversations_requires_human",
-        "conversations",
-        ["requires_human"],
+        "ix_dialogs_chat_channel",
+        "dialogs",
+        ["chat_id", "channel_id"],
+        unique=True,
     )
 
     op.create_table(
         "messages",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("conversation_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column("dialog_id", sa.BigInteger(), nullable=False),
         sa.Column("role", sa.String(length=16), nullable=False),
-        sa.Column("text", sa.Text(), nullable=True),
-        sa.Column("wazzup_message_id", sa.String(length=64), nullable=True),
-        sa.Column("tool_name", sa.String(length=64), nullable=True),
-        sa.Column(
-            "extra",
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=False,
-            server_default="{}",
-        ),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("wazzup_message_id", sa.String(length=128), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
+        sa.Column("llm_meta", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(
-            ["conversation_id"],
-            ["conversations.id"],
-            name=op.f("fk_messages_conversation_id_conversations"),
+            ["dialog_id"],
+            ["dialogs.id"],
+            name=op.f("fk_messages_dialog_id_dialogs"),
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_messages")),
     )
     op.create_index(
-        "ix_messages_conversation_created",
-        "messages",
-        ["conversation_id", "created_at"],
+        "ix_messages_dialog_created", "messages", ["dialog_id", "created_at"]
+    )
+    op.create_index(
+        "ix_messages_wazzup_id", "messages", ["wazzup_message_id"], unique=True
     )
 
     op.create_table(
-        "processed_messages",
-        sa.Column("wazzup_message_id", sa.String(length=64), nullable=False),
-        sa.Column("channel_id", sa.String(length=64), nullable=False),
-        sa.Column("chat_id", sa.String(length=128), nullable=False),
+        "leads",
+        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column("dialog_id", sa.BigInteger(), nullable=False),
+        sa.Column("brief", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "status",
+            sa.String(length=32),
+            nullable=False,
+            server_default="new",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.ForeignKeyConstraint(
+            ["dialog_id"],
+            ["dialogs.id"],
+            name=op.f("fk_leads_dialog_id_dialogs"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_leads")),
+    )
+
+    op.create_table(
+        "processed_messages",
+        sa.Column("wazzup_message_id", sa.String(length=128), nullable=False),
+        sa.Column("chat_id", sa.String(length=128), nullable=True),
+        sa.Column("channel_id", sa.String(length=128), nullable=True),
         sa.Column(
-            "updated_at",
+            "processed_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
@@ -124,7 +125,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("processed_messages")
-    op.drop_index("ix_messages_conversation_created", table_name="messages")
+    op.drop_table("leads")
+    op.drop_index("ix_messages_wazzup_id", table_name="messages")
+    op.drop_index("ix_messages_dialog_created", table_name="messages")
     op.drop_table("messages")
-    op.drop_index("ix_conversations_requires_human", table_name="conversations")
-    op.drop_table("conversations")
+    op.drop_index("ix_dialogs_chat_channel", table_name="dialogs")
+    op.drop_table("dialogs")

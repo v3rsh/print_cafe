@@ -1,23 +1,24 @@
-"""High-level dialog handler: from a user message to bot replies."""
+"""High-level dialog handler: оборачивает :class:`app.llm.agent.Agent`.
+
+Этот модуль остаётся точкой входа для воркера и тестов. Реальную работу —
+системный промпт, парсинг ответа, реестр инструментов — делает
+:class:`Agent`. Здесь только адаптер старого функционального API
+``handle_message(chat_id, user_message, state, llm)`` поверх Agent.
+"""
 
 from __future__ import annotations
 
-import logging
-import re
 from dataclasses import dataclass
 
-from app.dialog.state import DialogMessage, DialogStateStore
-from app.llm.client import YandexGPTClient
-from app.llm.prompts import build_system_messages
-
-logger = logging.getLogger(__name__)
-
-_HANDOFF_RE = re.compile(r"\[HANDOFF:\s*([a-z_]+)\s*\]", re.IGNORECASE)
-_SPLIT_RE = re.compile(r"\n-{2,}\n")
+from app.dialog.state import DialogStateStore
+from app.llm.agent import Agent, AgentReply
+from app.tools.handoff import HandoffResult
 
 
 @dataclass(slots=True)
 class BotReply:
+    """Backward-compatible форма ответа: список сообщений + handoff_reason."""
+
     messages: list[str]
     handoff_reason: str | None
     raw: str
@@ -27,36 +28,17 @@ class BotReply:
         return self.handoff_reason is not None
 
 
-def _parse_reply(raw: str) -> BotReply:
+def _to_bot_reply(reply: AgentReply) -> BotReply | None:
+    if reply.skipped:
+        return None
     handoff_reason: str | None = None
-    match = _HANDOFF_RE.search(raw)
-    if match:
-        handoff_reason = match.group(1).lower()
-        cleaned = _HANDOFF_RE.sub("", raw)
-    else:
-        cleaned = raw
-
-    parts = [chunk.strip() for chunk in _SPLIT_RE.split(cleaned) if chunk.strip()]
-    if not parts:
-        parts = [cleaned.strip()]
-    parts = [p for p in parts if p]
-    return BotReply(messages=parts, handoff_reason=handoff_reason, raw=raw)
-
-
-_MANAGER_KEYWORDS = (
-    "менеджер",
-    "оператор",
-    "человек",
-    "живой",
-    "сотрудник",
-    "позови",
-    "позовите",
-)
-
-
-def _wants_human(text: str) -> bool:
-    lower = text.lower()
-    return any(keyword in lower for keyword in _MANAGER_KEYWORDS)
+    if reply.handoff is not None and reply.handoff.triggered:
+        handoff_reason = reply.handoff.reason
+    return BotReply(
+        messages=reply.messages,
+        handoff_reason=handoff_reason,
+        raw=reply.raw,
+    )
 
 
 async def handle_message(
@@ -64,35 +46,27 @@ async def handle_message(
     chat_id: str,
     user_message: str,
     state: DialogStateStore,
-    llm: YandexGPTClient,
+    llm: object,
 ) -> BotReply | None:
-    if await state.is_human_takeover(chat_id):
-        await state.append_message(chat_id, DialogMessage(role="user", content=user_message))
-        logger.info("dialog_skipped_takeover", extra={"chat_id": chat_id})
+    """Однократная обработка реплики клиента.
+
+    ``llm`` — что-нибудь, у чего есть ``async def chat(messages, ...)``.
+    На проде это :class:`app.llm.client.YandexGPTClient`, в тестах — фейк.
+    """
+    agent = Agent(llm)  # type: ignore[arg-type]
+    reply = await agent.run(chat_id=chat_id, user_message=user_message, state=state)
+    return _to_bot_reply(reply)
+
+
+def execute_handoff_marker(reply: BotReply) -> HandoffResult | None:
+    """Превращает handoff_reason из reply в HandoffResult-«декларацию»."""
+    if not reply.needs_handoff or reply.handoff_reason is None:
         return None
+    return HandoffResult(triggered=True, reason=reply.handoff_reason, tag_pushed=False)
 
-    await state.append_message(chat_id, DialogMessage(role="user", content=user_message))
-    history = await state.get_history(chat_id)
 
-    if _wants_human(user_message):
-        text = (
-            "Конечно, передаю диалог менеджеру - он на связи в рабочие часы.\n"
-            "Пока он подключается, могу подсказать что-то по продукции?"
-        )
-        reply = BotReply(messages=text.split("\n"), handoff_reason="manager_requested", raw=text)
-        await state.append_message(chat_id, DialogMessage(role="assistant", content=text))
-        return reply
-
-    messages: list[dict[str, str]] = build_system_messages()
-    for entry in history:
-        role = entry.role if entry.role in {"user", "assistant", "system"} else "user"
-        messages.append({"role": role, "content": entry.content})
-
-    raw_response = await llm.chat(messages)
-    reply = _parse_reply(raw_response)
-
-    await state.append_message(
-        chat_id,
-        DialogMessage(role="assistant", content=raw_response),
-    )
-    return reply
+__all__ = [
+    "BotReply",
+    "execute_handoff_marker",
+    "handle_message",
+]

@@ -1,4 +1,4 @@
-"""Dialog worker: consumes ``wazzup:incoming`` stream and drives the bot."""
+"""Dialog worker: вычитывает Wazzup-сообщения из Redis Stream и ведёт диалог."""
 
 from __future__ import annotations
 
@@ -14,10 +14,12 @@ from redis.exceptions import ResponseError
 from app.config import Settings, get_settings
 from app.db.session import session_scope
 from app.dialog import history as history_repo
-from app.dialog.state import DialogMessage, DialogStateStore
+from app.dialog.idempotency import try_reserve_message
+from app.dialog.state import DialogStateStore
+from app.llm.agent import Agent
 from app.llm.client import YandexGPTClient
-from app.llm.dialog import handle_message
 from app.logging_config import configure_logging
+from app.tools.handoff import execute_handoff
 from app.wazzup.client import WazzupClient, WazzupClientError
 from app.wazzup.schemas import WazzupMessage
 
@@ -43,7 +45,7 @@ async def _process_message(
     settings: Settings,
     msg: WazzupMessage,
     state: DialogStateStore,
-    llm: YandexGPTClient,
+    agent: Agent,
     wazzup: WazzupClient,
 ) -> None:
     chat_id = msg.chat_id
@@ -58,8 +60,17 @@ async def _process_message(
         return
 
     if is_outgoing_operator:
-        await state.set_human_takeover(chat_id)
         async with session_scope() as session:
+            reserved = await try_reserve_message(
+                session,
+                wazzup_message_id=msg.message_id,
+                chat_id=chat_id,
+                channel_id=channel_id,
+            )
+            if not reserved:
+                logger.info("skip_duplicate_operator_msg", extra={"message_id": msg.message_id})
+                return
+            await state.set_human_takeover(chat_id)
             dialog = await history_repo.get_or_create_dialog(
                 session,
                 chat_id=chat_id,
@@ -75,7 +86,6 @@ async def _process_message(
                     wazzup_message_id=msg.message_id,
                 )
             await history_repo.mark_human_takeover(session, dialog)
-        await state.append_message(chat_id, DialogMessage(role="assistant", content=msg.text or ""))
         logger.info("operator_takeover", extra={"chat_id": chat_id})
         return
 
@@ -88,6 +98,17 @@ async def _process_message(
         return
 
     async with session_scope() as session:
+        reserved = await try_reserve_message(
+            session,
+            wazzup_message_id=msg.message_id,
+            chat_id=chat_id,
+            channel_id=channel_id,
+        )
+        if not reserved:
+            logger.info(
+                "skip_duplicate_inbound", extra={"message_id": msg.message_id, "chat_id": chat_id}
+            )
+            return
         dialog = await history_repo.get_or_create_dialog(
             session,
             chat_id=chat_id,
@@ -103,13 +124,16 @@ async def _process_message(
             wazzup_message_id=msg.message_id,
         )
 
-    reply = await handle_message(
+    reply = await agent.run(
         chat_id=chat_id,
         user_message=text,
         state=state,
-        llm=llm,
     )
-    if reply is None:
+    if reply.skipped:
+        logger.info(
+            "dialog_skipped",
+            extra={"chat_id": chat_id, "reason": reply.skip_reason},
+        )
         return
 
     for piece in reply.messages:
@@ -136,24 +160,20 @@ async def _process_message(
             dialog=dialog,
             role="assistant",
             content=reply.raw,
-            llm_meta={"handoff_reason": reply.handoff_reason},
+            llm_meta={
+                "handoff_reason": reply.handoff.reason if reply.handoff else None,
+                "messages_count": len(reply.messages),
+            },
         )
 
-    if reply.needs_handoff:
-        await state.set_human_takeover(chat_id)
-        await wazzup.add_tag(chat_id=chat_id, tag=f"human_needed:{reply.handoff_reason}")
-        async with session_scope() as session:
-            dialog = await history_repo.get_or_create_dialog(
-                session,
-                chat_id=chat_id,
-                channel_id=channel_id,
-                chat_type=chat_type,
+        if reply.needs_handoff and reply.handoff is not None:
+            await execute_handoff(
+                session=session,
+                state=state,
+                wazzup=wazzup,
+                dialog=dialog,
+                reason=reply.handoff.reason,
             )
-            await history_repo.mark_human_takeover(session, dialog)
-        logger.info(
-            "handoff_triggered",
-            extra={"chat_id": chat_id, "reason": reply.handoff_reason},
-        )
 
 
 async def _process_envelope(
@@ -161,7 +181,7 @@ async def _process_envelope(
     settings: Settings,
     fields: dict[bytes | str, bytes | str],
     state: DialogStateStore,
-    llm: YandexGPTClient,
+    agent: Agent,
     wazzup: WazzupClient,
 ) -> None:
     str_fields = {(k.decode() if isinstance(k, bytes) else k): v for k, v in fields.items()}
@@ -182,7 +202,7 @@ async def _process_envelope(
         settings=settings,
         msg=msg,
         state=state,
-        llm=llm,
+        agent=agent,
         wazzup=wazzup,
     )
 
@@ -214,6 +234,7 @@ async def run_worker() -> None:
         api_key=settings.wazzup_api_key.get_secret_value(),
         base_url=settings.wazzup_api_base_url,
     )
+    agent = Agent(llm)
 
     stop_event = asyncio.Event()
 
@@ -246,7 +267,7 @@ async def run_worker() -> None:
                             settings=settings,
                             fields=fields,
                             state=state,
-                            llm=llm,
+                            agent=agent,
                             wazzup=wazzup,
                         )
                     except Exception:
