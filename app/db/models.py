@@ -89,3 +89,23 @@ class Lead(Base):
     )
 
     dialog: Mapped[Dialog] = relationship(back_populates="leads")
+
+
+class ProcessedMessage(Base):
+    """Идемпотентный «штамп» уже принятых вебхуков Wazzup.
+
+    Redis-deduplication защищает от повторов в пределах TTL, но Redis может
+    падать или очищаться: если Wazzup ретраит вебхук через сутки, мы всё
+    равно не должны прогнать сообщение через LLM второй раз. Поэтому факт
+    обработки фиксируется в Postgres с уникальным ключом по
+    ``wazzup_message_id``.
+    """
+
+    __tablename__ = "processed_messages"
+
+    wazzup_message_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    chat_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    channel_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
