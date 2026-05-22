@@ -70,9 +70,7 @@ async def test_execute_handoff_marks_dialog_and_state(
     assert result.triggered is True
     assert result.reason == "precise_quote"
     assert result.tag_pushed is True
-    wazzup.add_tag.assert_awaited_once_with(
-        chat_id="chat-1", tag="human_needed:precise_quote"
-    )
+    wazzup.add_tag.assert_awaited_once_with(chat_id="chat-1", tag="human_needed:precise_quote")
     assert await state.is_human_takeover("chat-1") is True
 
     refreshed = await db_session.get(Dialog, dialog.id)

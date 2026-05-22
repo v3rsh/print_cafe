@@ -52,7 +52,7 @@ exclude = ["tests*", "scripts*", "alembic*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["alembic/versions"]
+extend-exclude = ["alembic/versions", "client_intake"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "S"]
@@ -74,7 +74,7 @@ known-first-party = ["app"]
 [tool.black]
 line-length = 100
 target-version = ["py312"]
-extend-exclude = "alembic/versions"
+extend-exclude = "alembic/versions|client_intake"
 
 # ---------------------------------------------------------------------------
 # Mypy
@@ -83,7 +83,7 @@ extend-exclude = "alembic/versions"
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-exclude = ["alembic/versions/", "build/", "dist/"]
+exclude = ["alembic/versions/", "build/", "dist/", "client_intake/"]
 
 [[tool.mypy.overrides]]
 module = ["fakeredis.*", "pythonjsonlogger.*"]

@@ -141,23 +141,17 @@ class Agent:
         state: DialogStateStore,
     ) -> AgentReply:
         if await state.is_human_takeover(chat_id):
-            await state.append_message(
-                chat_id, DialogMessage(role="user", content=user_message)
-            )
+            await state.append_message(chat_id, DialogMessage(role="user", content=user_message))
             return AgentReply(skipped=True, skip_reason="human_takeover")
 
-        await state.append_message(
-            chat_id, DialogMessage(role="user", content=user_message)
-        )
+        await state.append_message(chat_id, DialogMessage(role="user", content=user_message))
 
         if detect_explicit_handoff_request(user_message):
             text = (
                 "Передаю диалог менеджеру — он на связи в рабочие часы.\n"
                 "Если хотите, пока подскажу что-то по продукции или печати."
             )
-            await state.append_message(
-                chat_id, DialogMessage(role="assistant", content=text)
-            )
+            await state.append_message(chat_id, DialogMessage(role="assistant", content=text))
             return AgentReply(
                 messages=[line for line in text.split("\n") if line.strip()],
                 raw=text,
@@ -177,9 +171,7 @@ class Agent:
         raw_response = await self._llm.chat(messages)
         parts, handoff_reason = _parse_messages(raw_response)
 
-        await state.append_message(
-            chat_id, DialogMessage(role="assistant", content=raw_response)
-        )
+        await state.append_message(chat_id, DialogMessage(role="assistant", content=raw_response))
 
         handoff: HandoffResult | None = None
         if handoff_reason is not None:

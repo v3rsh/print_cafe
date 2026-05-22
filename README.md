@@ -64,18 +64,21 @@ print_cafe/
 - **Webhook Wazzup24 v3** (`POST /webhooks/wazzup`)
   - Проверка токена через заголовок `Authorization: Bearer <secret>` или query-параметр `?secret=...`.
   - Поддержка тестового запроса `{"test": true}` → 200 OK (нужно при подписке: иначе Wazzup ответит `testPostNotPassed`).
-  - Идемпотентность по `messageId`: `SETNX` в Redis с TTL 24 ч, дубли отбрасываются.
+  - **Двухуровневая идемпотентность по `messageId`**: на webhook-стороне быстрый `SETNX` в Redis (TTL 24 ч), в воркере — `INSERT` в `processed_messages` с уникальным PK; при конфликте — пропуск без побочных эффектов. Это переживает рестарт Redis и многосуточные ретраи.
   - Сообщения и статусы кладутся в Redis Stream `wazzup:incoming` с указанием `kind` (`message` / `status`); endpoint отвечает почти мгновенно.
 - **Async-клиент Wazzup24** (`app/wazzup/client.py`): `send_message`, `set_webhook`, `add_tag` (best-effort, см. TODO ниже). Тенasити-ретраи на 3 попытки с экспоненциальной задержкой при 429/5xx и сетевых ошибках.
 - **Клиент YandexGPT** через OpenAI-совместимый эндпоинт `https://llm.api.cloud.yandex.net/v1` (Yandex AI Studio, доступно с марта 2026). Передаёт `x-folder-id` и `x-data-logging-enabled: false` в заголовках, `model = gpt://<folder_id>/yandexgpt/rc` (ветка RC = 5.1 Pro).
 - **Системный промпт** (`app/llm/prompts.py`) фиксирует тон («вы», без эмодзи), запрещает выдумывать цены/сроки/скидки, дробит ответы на 1–3 коротких сообщения через маркер `\n---\n`, требует ставить служебный маркер `[HANDOFF: <reason>]` в конце ответа, когда нужен оператор. KB пока вшита в промпт как заглушка (на следующем этапе — RAG).
+- **Agent + Tool registry** (`app/llm/agent.py`, `app/tools/handoff.py`):
+  - Класс `Agent` держит реестр инструментов. На MVP зарегистрирован один — `handoff_to_human(reason)` со схемой в OpenAI tool-calling формате (готова к подключению нативных tool calls в следующей фазе).
+  - Триггер инструмента в MVP — маркер `[HANDOFF: <reason>]` в ответе LLM. Это надёжно работает с YandexGPT 5.1 Pro: native function calling в OpenAI-compat слое Yandex меняется и ведёт себя нестабильно, маркер же контролируется системным промптом.
+  - `execute_handoff` делает все побочные эффекты разом: `Dialog.status='human'` в БД, `set_human_takeover` в Redis, `WazzupClient.add_tag(human_needed:<reason>)` (best-effort).
 - **Dialog handler** (`app/llm/dialog.py`):
-  - Берёт историю из Redis (окно N=20), добавляет system prompt, отправляет в LLM.
-  - Парсит ответ: вырезает `[HANDOFF: …]`, делит по `\n---\n` на 1–3 куска.
+  - Тонкий backwards-compatible адаптер над `Agent`. Берёт историю из Redis (окно N=20), добавляет system prompt, отправляет в LLM, парсит маркер.
   - Ключевые слова «менеджер / оператор / человек / живой / сотрудник» — короткое замыкание без обращения к LLM.
 - **Dialog state**:
   - `Redis`: `dialog:{chat_id}:messages` (последние 20, TTL 7 дней), `dialog:{chat_id}:human_takeover` (флаг с TTL).
-  - `PostgreSQL`: таблицы `dialogs`, `messages`, `leads` (alembic-миграция `0001_initial`).
+  - `PostgreSQL`: таблицы `dialogs`, `messages`, `leads`, `processed_messages` (alembic-миграция `0001_initial`).
 - **Worker** (`app/workers/dialog_worker.py`):
   - Создаёт Redis consumer group `dialog_workers`, читает поток `wazzup:incoming`.
   - Outgoing-сообщения от оператора (`isEcho=true`) → выставляют `human_takeover`, бот молчит.
@@ -87,13 +90,14 @@ print_cafe/
   - `test_wazzup_webhook.py` — тест-проба, неверный токен, query-секрет, нормальное сообщение в стрим, дедуп.
   - `test_dialog_state.py` — append/read/trim, TTL, takeover, dedup setnx.
   - `test_llm_dialog.py` — мок LLM, проверка истории/блокировки/ключевых слов/парсинга `[HANDOFF]`.
+  - `test_handoff_tool.py` — схема инструмента, нормализация reason, real-side-effects через in-memory SQLite, deduplication ProcessedMessage.
 
 ## Чего НЕТ в MVP (следующие этапы)
 
 | Этап | Что подключаем |
 |---|---|
 | RAG | Парсер сайта/прайса, эмбеддинги Yandex (`text-search-doc/query`), Qdrant, гибридный поиск, `tool: search_knowledge` |
-| Tools | Pydantic AI агент: `calculate_price`, `collect_brief`, `handoff_to_human` (вместо текстового маркера) |
+| Tools | Native function calling YandexGPT (когда стабилизируется в OpenAI-compat) + `calculate_price`, `collect_brief` |
 | CRM | amoCRM / Bitrix24: создание лида, смена ответственного, теги |
 | Админка | FastAPI + HTMX: список диалогов, разметка, метрики, ручной реиндекс KB |
 | Деплой | TLS Caddy, Sentry, мониторинг, продовый канал Wazzup |
