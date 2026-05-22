@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -20,12 +21,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
+_PK = BigInteger().with_variant(Integer(), "sqlite")
+_FK = BigInteger().with_variant(Integer(), "sqlite")
+
 
 class Dialog(Base):
     __tablename__ = "dialogs"
     __table_args__ = (Index("ix_dialogs_chat_channel", "chat_id", "channel_id", unique=True),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(_PK, primary_key=True, autoincrement=True)
     chat_id: Mapped[str] = mapped_column(String(128), nullable=False)
     channel_id: Mapped[str] = mapped_column(String(128), nullable=False)
     contact_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -54,9 +58,9 @@ class Message(Base):
         Index("ix_messages_wazzup_id", "wazzup_message_id", unique=True),
     )
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(_PK, primary_key=True, autoincrement=True)
     dialog_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dialogs.id", ondelete="CASCADE"), nullable=False
+        _FK, ForeignKey("dialogs.id", ondelete="CASCADE"), nullable=False
     )
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -75,9 +79,9 @@ class Message(Base):
 class Lead(Base):
     __tablename__ = "leads"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(_PK, primary_key=True, autoincrement=True)
     dialog_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("dialogs.id", ondelete="CASCADE"), nullable=False
+        _FK, ForeignKey("dialogs.id", ondelete="CASCADE"), nullable=False
     )
     brief: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"),

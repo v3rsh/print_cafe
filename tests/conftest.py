@@ -1,4 +1,4 @@
-"""Test fixtures: fake redis, FastAPI test app without DB / Yandex calls."""
+"""Test fixtures: fake redis, FastAPI test app, in-memory SQLite session."""
 
 from __future__ import annotations
 
@@ -24,7 +24,15 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
 from app.config import get_settings  # noqa: E402
+from app.db import models as _models  # noqa: E402,F401  -- регистрирует таблицы
+from app.db.base import Base  # noqa: E402
 from app.wazzup.webhooks import router as wazzup_router  # noqa: E402
 
 
@@ -42,6 +50,21 @@ async def fake_redis() -> AsyncIterator[Any]:
         yield redis
     finally:
         await redis.aclose()
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncIterator[AsyncSession]:
+    """In-memory SQLite + создание таблиц на каждый тест."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with factory() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+    await engine.dispose()
 
 
 def _build_app(redis: Any) -> FastAPI:

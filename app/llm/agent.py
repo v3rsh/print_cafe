@@ -40,8 +40,7 @@ from app.tools.handoff import (
 )
 
 if TYPE_CHECKING:
-    from app.db.models import Dialog
-    from app.wazzup.client import WazzupClient
+    pass
 
 logger = logging.getLogger(__name__)
 
