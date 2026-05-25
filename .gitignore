@@ -9,9 +9,6 @@ dist/
 .venv/
 venv/
 .env
-.env.*
-!.env.example
-.envrc
 *.bak_secret
 
 .pytest_cache/
