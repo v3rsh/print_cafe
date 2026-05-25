@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from app.config import Settings, get_settings
 from app.dialog.state import DialogStateStore
 from app.wazzup.schemas import WazzupWebhookPayload
+from app.wazzup.whitelist import is_chat_allowed
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["wazzup"])
@@ -82,9 +83,18 @@ async def receive_wazzup_webhook(
 
     accepted = 0
     duplicates = 0
+    foreign = 0
+    allowed = settings.wazzup_allowed_chat_ids
 
     if payload.messages:
         for message in payload.messages:
+            if not is_chat_allowed(allowed, message.chat_id):
+                foreign += 1
+                logger.debug(
+                    "foreign_chat_dropped_at_webhook",
+                    extra={"chat_id": message.chat_id},
+                )
+                continue
             if not await state.mark_seen(message.message_id):
                 duplicates += 1
                 continue
@@ -118,7 +128,13 @@ async def receive_wazzup_webhook(
         extra={
             "messages": accepted,
             "duplicates": duplicates,
+            "foreign": foreign,
             "statuses": len(payload.statuses or []),
         },
     )
-    return {"ok": True, "accepted": accepted, "duplicates": duplicates}
+    return {
+        "ok": True,
+        "accepted": accepted,
+        "duplicates": duplicates,
+        "foreign": foreign,
+    }

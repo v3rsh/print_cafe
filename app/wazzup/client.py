@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Protocol, Self
 
 import httpx
 from tenacity import (
@@ -24,7 +24,26 @@ class WazzupClientError(RuntimeError):
     """Raised on non-recoverable failures from Wazzup API."""
 
 
+class OutgoingTracker(Protocol):
+    """Минимальный интерфейс хранилища отправленных messageId для дедупликации echo."""
+
+    async def mark_outgoing_sent(self, message_id: str, *, ttl: int | None = ...) -> None: ...
+
+
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _extract_message_id(payload: dict[str, Any]) -> str | None:
+    """Wazzup v3 кладёт messageId либо на верхнем уровне, либо в .data — поддерживаем оба."""
+    direct = payload.get("messageId")
+    if isinstance(direct, str) and direct:
+        return direct
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested = data.get("messageId")
+        if isinstance(nested, str) and nested:
+            return nested
+    return None
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -41,6 +60,7 @@ class WazzupClient:
         *,
         timeout: float = 15.0,
         client: httpx.AsyncClient | None = None,
+        outgoing_tracker: OutgoingTracker | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -53,6 +73,7 @@ class WazzupClient:
                 "Content-Type": "application/json",
             },
         )
+        self._outgoing_tracker = outgoing_tracker
 
     async def __aenter__(self) -> Self:
         return self
@@ -124,6 +145,27 @@ class WazzupClient:
             )
             raise WazzupClientError(f"send_message failed: {response.status_code} {response.text}")
         result: dict[str, Any] = response.json() if response.content else {}
+
+        if self._outgoing_tracker is not None:
+            message_id = _extract_message_id(result)
+            if message_id:
+                try:
+                    await self._outgoing_tracker.mark_outgoing_sent(message_id)
+                except Exception:  # noqa: BLE001 — tracker не должен валить отправку
+                    logger.exception(
+                        "wazzup_mark_outgoing_failed",
+                        extra={"message_id": message_id, "chat_id": chat_id},
+                    )
+            else:
+                logger.warning(
+                    "wazzup_send_message_no_message_id",
+                    extra={
+                        "chat_id": chat_id,
+                        "channel_id": channel_id,
+                        "response_keys": sorted(result.keys()),
+                    },
+                )
+
         return result
 
     async def add_tag(self, *, chat_id: str, tag: str) -> None:

@@ -55,3 +55,21 @@ async def test_dedup_setnx(fake_redis: Any) -> None:
     store = DialogStateStore(fake_redis, dedup_ttl_seconds=60)
     assert await store.mark_seen("m-1") is True
     assert await store.mark_seen("m-1") is False
+
+
+@pytest.mark.asyncio
+async def test_outgoing_sent_marker(fake_redis: Any) -> None:
+    store = DialogStateStore(fake_redis, outgoing_sent_ttl_seconds=60)
+    assert await store.is_our_outgoing("out-1") is False
+    await store.mark_outgoing_sent("out-1")
+    assert await store.is_our_outgoing("out-1") is True
+    ttl = await fake_redis.ttl("outgoing:sent:out-1")
+    assert 0 < ttl <= 60
+
+
+@pytest.mark.asyncio
+async def test_outgoing_sent_custom_ttl(fake_redis: Any) -> None:
+    store = DialogStateStore(fake_redis, outgoing_sent_ttl_seconds=60)
+    await store.mark_outgoing_sent("out-2", ttl=10)
+    ttl = await fake_redis.ttl("outgoing:sent:out-2")
+    assert 0 < ttl <= 10

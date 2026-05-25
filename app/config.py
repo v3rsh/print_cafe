@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     wazzup_api_base_url: str = "https://api.wazzup24.com"
     wazzup_webhook_secret: SecretStr = SecretStr("")
     wazzup_public_webhook_url: str = ""
+    wazzup_allowed_chat_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     yandex_api_key: SecretStr = SecretStr("")
     yandex_folder_id: str = ""
@@ -51,11 +52,33 @@ class Settings(BaseSettings):
     dialog_history_window: int = Field(default=20, ge=1, le=200)
     dialog_history_ttl_seconds: int = Field(default=7 * 24 * 3600, ge=60)
     wazzup_dedup_ttl_seconds: int = Field(default=24 * 3600, ge=60)
+    wazzup_outgoing_sent_ttl_seconds: int = Field(default=3600, ge=60)
+    enable_operator_takeover_from_echo: bool = True
 
     @field_validator("yandex_model")
     @classmethod
     def _check_yandex_model(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("wazzup_allowed_chat_ids", mode="before")
+    @classmethod
+    def _parse_allowed_chat_ids(cls, value: object) -> list[str]:
+        """Accept either a list or a comma-separated string from env."""
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [
+                item.strip().lstrip("+").replace(" ", "")
+                for item in value.split(",")
+                if item.strip()
+            ]
+        if isinstance(value, list):
+            return [
+                str(item).strip().lstrip("+").replace(" ", "")
+                for item in value
+                if str(item).strip()
+            ]
+        return []
 
     @property
     def yandex_model_resolved(self) -> str:

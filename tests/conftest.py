@@ -22,6 +22,9 @@ os.environ.setdefault("YANDEX_FOLDER_ID", "test-folder")
 os.environ.setdefault("YANDEX_MODEL", "gpt://test-folder/yandexgpt/rc")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# Tests must not inherit the production whitelist from .env; individual tests
+# opt-in via monkeypatch.setenv when whitelist behaviour is being exercised.
+os.environ.setdefault("WAZZUP_ALLOWED_CHAT_IDS", "")
 
 
 from sqlalchemy.ext.asyncio import (  # noqa: E402

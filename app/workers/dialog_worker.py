@@ -22,6 +22,7 @@ from app.logging_config import configure_logging
 from app.tools.handoff import execute_handoff
 from app.wazzup.client import WazzupClient, WazzupClientError
 from app.wazzup.schemas import WazzupMessage
+from app.wazzup.whitelist import is_chat_allowed, normalize_chat_id
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,16 @@ async def _ensure_group(redis: Redis[bytes], stream: str, group: str) -> None:
 def _parse_payload(value: bytes | str) -> dict[str, Any]:
     raw = value.decode() if isinstance(value, bytes) else value
     return cast("dict[str, Any]", json.loads(raw))
+
+
+def _normalize_chat_id(chat_id: str) -> str:
+    """Thin alias preserved for tests; canonical impl lives in app.wazzup.whitelist."""
+    return normalize_chat_id(chat_id)
+
+
+def _is_chat_allowed(settings: Settings, chat_id: str) -> bool:
+    """Thin alias preserved for tests; canonical impl lives in app.wazzup.whitelist."""
+    return is_chat_allowed(settings.wazzup_allowed_chat_ids, chat_id)
 
 
 async def _process_message(
@@ -59,7 +70,28 @@ async def _process_message(
         logger.info("skip_deleted_message", extra={"message_id": msg.message_id})
         return
 
+    if not _is_chat_allowed(settings, chat_id):
+        logger.debug(
+            "foreign_chat_dropped_at_worker",
+            extra={"chat_id": chat_id, "channel_id": channel_id},
+        )
+        return
+
     if is_outgoing_operator:
+        if await state.is_our_outgoing(msg.message_id):
+            logger.info(
+                "own_echo_ignored",
+                extra={"message_id": msg.message_id, "chat_id": chat_id},
+            )
+            return
+
+        if not settings.enable_operator_takeover_from_echo:
+            logger.info(
+                "operator_takeover_disabled",
+                extra={"message_id": msg.message_id, "chat_id": chat_id},
+            )
+            return
+
         async with session_scope() as session:
             reserved = await try_reserve_message(
                 session,
@@ -220,6 +252,7 @@ async def run_worker() -> None:
         window=settings.dialog_history_window,
         ttl_seconds=settings.dialog_history_ttl_seconds,
         dedup_ttl_seconds=settings.wazzup_dedup_ttl_seconds,
+        outgoing_sent_ttl_seconds=settings.wazzup_outgoing_sent_ttl_seconds,
     )
     llm = YandexGPTClient(
         api_key=settings.yandex_api_key.get_secret_value(),
@@ -233,6 +266,7 @@ async def run_worker() -> None:
     wazzup = WazzupClient(
         api_key=settings.wazzup_api_key.get_secret_value(),
         base_url=settings.wazzup_api_base_url,
+        outgoing_tracker=state,
     )
     agent = Agent(llm)
 

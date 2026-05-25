@@ -52,11 +52,13 @@ class DialogStateStore:
         window: int = 20,
         ttl_seconds: int = 7 * 24 * 3600,
         dedup_ttl_seconds: int = 24 * 3600,
+        outgoing_sent_ttl_seconds: int = 3600,
     ) -> None:
         self._redis = redis
         self._window = window
         self._ttl = ttl_seconds
         self._dedup_ttl = dedup_ttl_seconds
+        self._outgoing_sent_ttl = outgoing_sent_ttl_seconds
 
     @staticmethod
     def _messages_key(chat_id: str) -> str:
@@ -69,6 +71,10 @@ class DialogStateStore:
     @staticmethod
     def _dedup_key(message_id: str) -> str:
         return f"wazzup:dedup:{message_id}"
+
+    @staticmethod
+    def _outgoing_sent_key(message_id: str) -> str:
+        return f"outgoing:sent:{message_id}"
 
     async def append_message(self, chat_id: str, message: DialogMessage) -> None:
         key = self._messages_key(chat_id)
@@ -101,3 +107,16 @@ class DialogStateStore:
             nx=True,
         )
         return bool(result)
+
+    async def mark_outgoing_sent(self, message_id: str, *, ttl: int | None = None) -> None:
+        """Помечаем messageId как отправленный нами, чтобы потом распознать собственное echo."""
+        await self._redis.set(
+            self._outgoing_sent_key(message_id),
+            "1",
+            ex=ttl if ttl is not None else self._outgoing_sent_ttl,
+        )
+
+    async def is_our_outgoing(self, message_id: str) -> bool:
+        """True если этот messageId недавно отправлен нами через WazzupClient.send_message."""
+        value = await self._redis.get(self._outgoing_sent_key(message_id))
+        return value is not None

@@ -84,6 +84,11 @@ print_cafe/
   - Outgoing-сообщения от оператора (`isEcho=true`) → выставляют `human_takeover`, бот молчит.
   - Incoming → персистится в БД, идёт через `handle_message`, ответ отправляется обратно по `WazzupClient.send_message`, при `[HANDOFF]` ставится тег и `human_takeover`.
   - Ошибка на одном сообщении не валит весь воркер: `xack` + `logger.exception`.
+- **Дедупликация echo от собственных отправок**:
+  - При успешном `POST /v3/message` `WazzupClient` извлекает `messageId` из ответа и кладёт в Redis под ключом `outgoing:sent:{messageId}` (TTL `WAZZUP_OUTGOING_SENT_TTL_SECONDS`, по умолчанию 1 час) через `DialogStateStore.mark_outgoing_sent`.
+  - В воркере перед веткой operator-takeover проверяется `DialogStateStore.is_our_outgoing(message_id)`. Если ключ есть — это эхо нашего же ответа: логируется `event=own_echo_ignored`, никаких побочных эффектов (ни записи `role='operator'` в БД, ни `human_takeover`). Если ключа нет — echo принадлежит реальному оператору в Wazzup UI, и работает старая логика takeover.
+  - Полностью отключить ветку takeover из echo можно флагом `ENABLE_OPERATOR_TAKEOVER_FROM_ECHO=false` (kill-switch на случай инцидентов). По умолчанию `true`.
+  - Если в ответе Wazzup отсутствует `messageId` (нештатная ситуация), пишется `wazzup_send_message_no_message_id` WARN, отправка не падает.
 - **Health/Ready**: `/health` всегда 200, `/ready` пингует Redis и PostgreSQL.
 - **Логирование**: structlog, JSON в проде (контролируется `LOG_JSON`).
 - **Тесты** (`pytest -xvs`):
