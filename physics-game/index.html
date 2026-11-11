@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ТермоКвест — физика 8 класс</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true">
+      <div class="bg__grid"></div>
+      <div class="bg__orb bg__orb--a"></div>
+      <div class="bg__orb bg__orb--b"></div>
+      <div class="bg__wave"></div>
+    </div>
+
+    <main class="app">
+      <!-- HOME -->
+      <section id="screen-home" class="screen screen--home is-active" aria-label="Старт">
+        <p class="brand">ТермоКвест</p>
+        <h1 class="hero-title">Физика 8 класс</h1>
+        <p class="hero-lead">
+          Первые три темы: температура, внутренняя энергия и способы её
+          изменения. Отвечай верно — копи энергию.
+        </p>
+        <div class="cta-row">
+          <button type="button" class="btn btn--primary" data-action="start-all">
+            Играть все темы
+          </button>
+          <button type="button" class="btn btn--ghost" data-action="show-topics">
+            Выбрать тему
+          </button>
+        </div>
+      </section>
+
+      <!-- TOPICS -->
+      <section id="screen-topics" class="screen" aria-label="Темы" hidden>
+        <header class="topbar">
+          <button type="button" class="btn btn--text" data-action="go-home">← Назад</button>
+          <span class="topbar__label">Выбор темы</span>
+        </header>
+        <h2 class="section-title">Три старта курса</h2>
+        <p class="section-lead">Каждая тема — отдельный раунд из 5 вопросов.</p>
+        <div class="topic-list" id="topic-list"></div>
+        <button type="button" class="btn btn--primary btn--wide" data-action="start-all">
+          Пройти все подряд
+        </button>
+      </section>
+
+      <!-- QUIZ -->
+      <section id="screen-quiz" class="screen" aria-label="Вопрос" hidden>
+        <header class="topbar">
+          <button type="button" class="btn btn--text" data-action="quit-quiz">← Выйти</button>
+          <div class="hud">
+            <span class="hud__item" id="hud-topic">Тема</span>
+            <span class="hud__item" id="hud-progress">1 / 5</span>
+            <span class="hud__item hud__item--energy" id="hud-energy">⚡ 0</span>
+          </div>
+        </header>
+        <div class="progress" aria-hidden="true">
+          <div class="progress__fill" id="progress-fill"></div>
+        </div>
+        <p class="q-meta" id="q-meta"></p>
+        <h2 class="q-text" id="q-text"></h2>
+        <div class="answers" id="answers" role="list"></div>
+        <div class="feedback" id="feedback" hidden>
+          <p class="feedback__title" id="feedback-title"></p>
+          <p class="feedback__text" id="feedback-text"></p>
+          <button type="button" class="btn btn--primary" data-action="next-question">
+            Дальше
+          </button>
+        </div>
+      </section>
+
+      <!-- RESULT -->
+      <section id="screen-result" class="screen screen--result" aria-label="Итог" hidden>
+        <p class="brand brand--sm">ТермоКвест</p>
+        <h2 class="result-title" id="result-title">Раунд завершён</h2>
+        <p class="result-score" id="result-score"></p>
+        <p class="result-lead" id="result-lead"></p>
+        <div class="result-stats" id="result-stats"></div>
+        <div class="cta-row">
+          <button type="button" class="btn btn--primary" data-action="retry">Ещё раз</button>
+          <button type="button" class="btn btn--ghost" data-action="show-topics">К темам</button>
+          <button type="button" class="btn btn--ghost" data-action="go-home">На главную</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="questions.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
